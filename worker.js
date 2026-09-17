@@ -177,9 +177,36 @@ async function handleChatCompletions(request, requestId) {
     (async () => {
       try {
         if (isImageModel) {
-          // --- 图片模型逻辑：获取URL并作为单个流式块发送 ---
+          // --- 图片模型逻辑：获取URL并作为单个流式块发送 (С CSRF-ФИКСОМ) ---
+          
+          // 🔥 ШАГ 1: Получаем CSRF-токен и cookies
+          const typliSession = await getTypliCsrfToken();
+          
+          if (!typliSession) {
+            throw new Error('Не удалось установить сессию с Typli.ai (CSRF) для изображений');
+          }
+
+          console.log('🔑 Image CSRF session obtained:', {
+            hasCookies: !!typliSession.cookies,
+            cookiesLength: typliSession.cookies?.length || 0,
+            hasCsrfToken: !!typliSession.csrfToken
+          });
+
           const payload = { prompt, model };
-          const headers = { ...CONFIG.BASE_HEADERS, "referer": CONFIG.REFERER_IMAGE_URL };
+          
+          // 🔥 ШАГ 2: Формируем заголовки с cookies
+          const headers = { 
+            ...CONFIG.BASE_HEADERS, 
+            "referer": CONFIG.REFERER_IMAGE_URL,
+            "Cookie": typliSession.cookies
+          };
+          
+          // 🔥 ШАГ 3: Добавляем CSRF-токен
+          if (typliSession.csrfToken) {
+            headers["X-CSRF-Token"] = typliSession.csrfToken;
+            headers["X-XSRF-TOKEN"] = typliSession.csrfToken;
+          }
+
           const response = await fetch(CONFIG.UPSTREAM_IMAGE_URL, {
             method: "POST",
             headers: headers,
