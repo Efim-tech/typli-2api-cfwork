@@ -233,27 +233,22 @@ async function handleChatCompletions(request, requestId) {
         } else {
           // --- 聊天模型逻辑：代理上游流式响应 (С ИСПРАВЛЕНИЕМ CSRF) ---
 
-          // 🔥 ШАГ 1: Получаем CSRF-токен и cookies с главной страницы
+          // 1. Получаем сессию с главной страницы
           const typliSession = await getTypliCsrfToken();
-
+          
           if (!typliSession) {
             throw new Error('Не удалось установить сессию с Typli.ai (CSRF)');
           }
-
-          console.log('🔑 CSRF session obtained:', {
-            hasCookies: !!typliSession.cookies,
-            cookiesLength: typliSession.cookies?.length || 0,
-            hasCsrfToken: !!typliSession.csrfToken,
-            csrfToken: typliSession.csrfToken
-          });
-
+          
+          // 2. Генерируем sessionId ТОЛЬКО ОДИН РАЗ
           const sessionId = generateRandomId(16);
+          
           const typliMessages = (body.messages || []).map(msg => ({
             parts: [{ type: "text", text: msg.content }],
             id: generateRandomId(16),
             role: msg.role
           }));
-
+          
           const payload = {
             slug: "free-no-sign-up-chatgpt",
             modelId: model,
@@ -261,27 +256,20 @@ async function handleChatCompletions(request, requestId) {
             messages: typliMessages,
             trigger: "submit-message"
           };
-
-          // 🔥 ШАГ 2: Формируем заголовки с полученными cookies
+          
+          // 3. Формируем заголовки с полученными cookies и CSRF
           const headers = {
             ...CONFIG.BASE_HEADERS,
             "referer": CONFIG.REFERER_CHAT_URL,
-            // Добавляем cookies, которые получили ранее
-            "Cookie": typliSession.cookies
+            "Cookie": typliSession.cookies  // ← Из той же сессии!
           };
-
-          // 🔥 ШАГ 3: Если нашли CSRF-токен, добавляем его в заголовки
+          
           if (typliSession.csrfToken) {
             headers["X-CSRF-Token"] = typliSession.csrfToken;
             headers["X-XSRF-TOKEN"] = typliSession.csrfToken;
           }
-
-          console.log('📤 Sending chat request with headers:', {
-            referer: headers.referer,
-            cookieLength: headers.Cookie?.length || 0,
-            hasCsrf: !!headers['X-CSRF-Token']
-          });
-
+          
+          // 4. Отправляем POST с тем же sessionId
           const response = await fetch(CONFIG.UPSTREAM_CHAT_URL, {
             method: "POST",
             headers: headers,
@@ -355,78 +343,6 @@ function generateRandomId(length) {
   let result = '';
   for (let i = 0; i < length; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
   return result;
-}
-
-// 🔥 НОВАЯ ФУНКЦИЯ: Получение CSRF-токена и cookies от Typli.ai
-async function getTypliCsrfToken() {
-  try {
-    // 1. Делаем GET-запрос на страницу чата, чтобы получить cookies
-    const initResponse = await fetch(CONFIG.REFERER_CHAT_URL, {
-      method: 'GET',
-      headers: {
-        ...CONFIG.BASE_HEADERS,
-        // Убираем content-type для GET-запроса, он не нужен
-        'content-type': undefined,
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'sec-fetch-dest': 'document',
-        'sec-fetch-mode': 'navigate',
-        'sec-fetch-site': 'none',
-        'upgrade-insecure-requests': '1',
-      },
-      redirect: 'follow'
-    });
-
-    if (!initResponse.ok) {
-      console.warn('Не удалось загрузить страницу Typli для получения CSRF:', initResponse.status);
-      return null;
-    }
-
-    // 2. Извлекаем cookies из заголовков ответа
-    const setCookieHeaders = initResponse.headers.getAll('Set-Cookie');
-    let cookieString = '';
-    let csrfToken = null;
-
-    for (const header of setCookieHeaders) {
-      // Собираем все cookies в одну строку
-      const cookiePart = header.split(';')[0];
-      cookieString += cookiePart + '; ';
-
-      // Ищем CSRF токен в cookie (обычно называется __Host-csrf, csrf, или XSRF-TOKEN)
-      const match = header.match(/(__Host-csrf|csrf|XSRF-TOKEN)=([^;]+)/i);
-      if (match) {
-        csrfToken = match[2];
-        console.log('🔑 Найден CSRF токен в cookie:', csrfToken);
-      }
-    }
-
-    // 3. Если CSRF токена нет в cookies, пробуем найти его в HTML
-    if (!csrfToken) {
-      const html = await initResponse.text();
-      // Ищем CSRF токен в HTML (паттерны могут быть разными)
-      const htmlMatch = html.match(/name="csrf-token"\s+content="([^"]+)"/i) ||
-                        html.match(/csrfToken["']?\s*[:=]\s*["']([^"']+)["']/i) ||
-                        html.match(/csrf-token["']?\s*[:=]\s*["']([^"']+)["']/i);
-      if (htmlMatch) {
-        csrfToken = htmlMatch[1];
-        console.log('🔑 Найден CSRF токен в HTML:', csrfToken);
-      }
-    }
-
-    if (!cookieString && !csrfToken) {
-      console.warn('Не удалось получить ни cookies, ни CSRF токен');
-      return null;
-    }
-
-    // Возвращаем и cookies, и токен
-    return {
-      cookies: cookieString.trim(),
-      csrfToken: csrfToken
-    };
-
-  } catch (e) {
-    console.error('Ошибка при получении CSRF токена:', e.message);
-    return null;
-  }
 }
 
 function createChatCompletionChunk(id, model, content, finishReason = null) {
